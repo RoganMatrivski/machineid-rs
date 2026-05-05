@@ -2,17 +2,10 @@
 use crate::errors::HWIDError;
 #[cfg(target_os = "windows")]
 use serde::Deserialize;
-
 #[cfg(target_os = "windows")]
 use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
-
 #[cfg(target_os = "windows")]
-use wmi::{COMLibrary, WMIConnection};
-
-thread_local! {
-    #[cfg(target_os="windows")]
-    static COM_LIB:COMLibrary = COMLibrary::without_security().unwrap();
-}
+use wmi::WMIConnection;
 
 #[cfg(target_os = "windows")]
 pub fn get_hwid() -> Result<String, HWIDError> {
@@ -23,7 +16,7 @@ pub fn get_hwid() -> Result<String, HWIDError> {
         KEY_READ | KEY_WOW64_64KEY,
     )?;
 
-    let id = rkey.get_value("MachineGuid")?;
+    let id: String = rkey.get_value("MachineGuid")?;
     Ok(id)
 }
 
@@ -31,38 +24,47 @@ pub fn get_hwid() -> Result<String, HWIDError> {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct DiskGeneric {
-    serial_number: String,
+    serial_number: Option<String>,
 }
 
 #[cfg(target_os = "windows")]
 #[derive(Deserialize)]
 struct MACGeneric {
-    MACAddress: String,
+    #[serde(rename = "MACAddress")]
+    mac_address: Option<String>,
 }
 
 #[cfg(target_os = "windows")]
 pub(crate) fn get_disk_id() -> Result<String, HWIDError> {
-    let con = WMIConnection::new(COM_LIB.with(|con| *con))?;
-    let ser: Vec<DiskGeneric> = con.raw_query("SELECT SerialNumber FROM Win32_PhysicalMedia")?;
-    let serial = ser
-        .get(0)
-        .ok_or(HWIDError::new("UuidError", "Could not retrieve Uuid"))?
-        .serial_number
-        .clone();
+    let con = WMIConnection::new()?;
+
+    let disks: Vec<DiskGeneric> = con.raw_query("SELECT SerialNumber FROM Win32_PhysicalMedia")?;
+
+    let serial = disks
+        .into_iter()
+        .find_map(|d| d.serial_number)
+        .ok_or(HWIDError::new(
+            "UuidError",
+            "Could not retrieve disk serial number",
+        ))?;
+
     Ok(serial)
 }
 
 #[cfg(target_os = "windows")]
 pub(crate) fn get_mac_address() -> Result<String, HWIDError> {
-    let con = WMIConnection::new(COM_LIB.with(|con| *con))?;
-    let ser: Vec<MACGeneric> =
-        con.raw_query("SELECT MACAddress from Win32_NetworkAdapter WHERE MACAddress IS NOT NULL")?;
-    Ok(ser
-        .get(0)
+    let con = WMIConnection::new()?;
+
+    let adapters: Vec<MACGeneric> =
+        con.raw_query("SELECT MACAddress FROM Win32_NetworkAdapter WHERE MACAddress IS NOT NULL")?;
+
+    let mac = adapters
+        .into_iter()
+        .find_map(|a| a.mac_address)
         .ok_or(HWIDError::new(
             "MACAddress",
             "Could not retrieve Mac Address",
-        ))?
-        .MACAddress
-        .clone())
+        ))?;
+
+    Ok(mac)
 }
